@@ -9,6 +9,8 @@ Original file is located at
 
 from Bio import Entrez
 from Bio import SeqIO
+from Bio.SeqUtils import MeltingTemp as mt
+from Bio.Seq import Seq
 
 
 class State:
@@ -16,6 +18,8 @@ class State:
         self.vector = None
         self.linear_insert = None
         self.clone_seq = None
+        self.insert_position = None
+        self.position = None
 
     def store_vector(self, vector):
         if not isinstance(vector, SeqIO.SeqRecord):
@@ -42,10 +46,108 @@ class State:
         return self.clone_seq
     # seq to annotation
 
+    def do_cloning(self, backbone, insert) -> (str,str): 
+        '''
+        Generate cloning product and primer sequences for insertion of a backbone into a plasmid
+
+        Inputs:
+            backbone: str, backbone sequence
+            insert: str, insert sequence
+            position: int, position in backbone to insert insert sequence
+            num_left_overhang: int, number of bases on left side of restriction enzyme
+            num_right_overhang: int, number of bases on right side of restriction enzyme
+        
+        Outputs:
+            left_primer: str, left primer sequence
+            right_primer: str, right primer sequence
+            product: str, product sequence
+        
+        Sample usage:
+            generate_primer_sequences(<base seq>, 
+                                    <insert seq>,
+                                        position = 31)
+        '''
+
+        insert = self.linear_insert
+        backbone = self.vector
+        position = self.insert_position
+
+        # make uppercase
+        insert = insert.upper()
+        backbone = backbone.upper()
+        extra_bases = 'TAAGCA'
+
+        #TODO: should eventually be global params in state
+        num_left_overhang, num_right_overhang = (6, 6)
+        insert_l_min = 15
+        insert_l_max = 20
+        target_tm = 60
+
+        temp_avgs = []
+        temp_diffs = []
+        left_primer_list = []
+        right_primer_list = []
+        # test different insert lengths
+        for i in range(insert_l_min, insert_l_max):
+            ins_ = insert[:i]
+
+            # find completentary sequences on left and right
+            left_overhang = backbone[self.position-num_left_overhang:self.position]
+            right_overhang = backbone[self.position:self.position+num_right_overhang]
+            left_overhang_complement = get_complementary_sequence(left_overhang)
+            right_overhang_complement = get_complementary_sequence(right_overhang)
+
+            # generate primer sequences
+
+            # make forward primer
+            left_primer_ = ins_ + extra_bases + left_overhang_complement
+
+            # make reverse primer
+            right_overhang_complement_reversed = right_overhang_complement[::-1] # reverse
+            right_primer_ = ins_ + right_overhang_complement_reversed + extra_bases
+
+            # calculate melting temperatures
+            print(left_primer_)
+            print(right_primer_)
+            left_mt = mt.Tm_NN(left_primer_.seq)
+            right_mt = mt.Tm_NN(right_primer_.seq)
+            temp_avg = (left_mt + right_mt) / 2 - target_tm
+            temp_diff = abs(left_mt - right_mt)
+
+            temp_avgs.append(temp_avg)
+            print(temp_avg)
+            temp_diffs.append(temp_diff)
+            left_primer_list.append(left_primer_)
+            right_primer_list.append(right_primer_)
+
+        # pick best primer pair (according to temp_avg only for now)
+        #TODO: should also take temp_diff into account
+
+        best_index = temp_avgs.index(min(temp_avgs))
+        left_primer = left_primer_list[best_index]
+        right_primer = right_primer_list[best_index]
+
+        product = backbone[:self.position] + insert + backbone[self.position:]
+        return left_primer, right_primer, product
+
 
 def download_genbank_file(accession, filename):
-    Entrez.email = "tina.zetong.jia@example.com"  # Always provide your email address when using NCBI's services
+    Entrez.email = "tina.zetong.jia@example.com"  # Always provide your email address when usin g NCBI's services
     with Entrez.efetch(db="nucleotide", id=accession, rettype="gb", retmode="text") as handle:
         with open(filename, 'w') as outfile:
             outfile.write(handle.read())
 
+def get_complementary_sequence(sequence):
+    complement = {'A': 'T', 'C': 'G', 'G': 'C', 'T': 'A'}
+    return ''.join([complement[base] for base in sequence])
+
+
+if __name__ == '__main__':
+    # load DNA file
+    b = open('sanclone/dna.txt').readlines()[1].strip() # backbone
+    i = 'ctggttaccaggcttaacactagccatcacagcgtagtctggcaacgttatgatatctacagcagatacatgcgtcgtatgccgccactttgcatcattacagacgcctataaagaaaccacgcatcagg'
+    s = State()
+    s.store_linear_insert(SeqIO.SeqRecord(Seq(i)))
+    s.store_vector(SeqIO.SeqRecord(Seq(b)))
+    s.position = 31
+    print(s.do_cloning(b, i))
